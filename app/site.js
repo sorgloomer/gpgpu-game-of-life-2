@@ -1,5 +1,5 @@
 
-(function(self, window, Math, Uint8Array, Float32Array){
+(function(self, window, document, Math, Uint8Array, Float32Array){
   var canvas, gl;
 
   var shaderGrassGrow, shaderGrassRender, shaderHerbivoreMoveSpawn;
@@ -12,22 +12,37 @@
 
   var EPS = 1e-5;
   var SIZE = 256;
-  var SEED_SIZE = 256;
+  var SEED_SIZE = 64;
   
  
   
   var OPTIONS = {
     ITERATIONS_PER_FRAME: 50,
     GRASS_MUTATION_RATE: 6 / 255,
-    GRASS_GROW_RATE: 2 / 255,
-    HERBIVORE_STEP_RATE: 1.0,
+    GRASS_GROW_RATE: 1 / 255,
+    HERBIVORE_STEP_RATE: 0.5,
     // Actual apawn rate is 10% of this constant
-    HERBIVORE_SPAWN_RATE: 4 / 255,
+    HERBIVORE_SPAWN_RATE: 0 / 255,
     HERBIVORE_START_HEALTH: 50 / 255,
-    HERBIVORE_INC_HEALTH: 3 / 255,
-    HERBIVORE_DEC_HEALTH: 2 / 255,
-    HERBIVORE_COLOR_MUTATION_RATE: 0 / 255,
-    HERBIVORE_DISLIKE_RATE: 0.2
+    HERBIVORE_INC_HEALTH: 0 / 255,
+    HERBIVORE_DEC_HEALTH: 0 / 255,
+    HERBIVORE_COLOR_MUTATION_RATE: 1 / 255,
+    HERBIVORE_DISLIKE_RATE: 0.2,
+    $meta: {
+      unit: {
+        ITERATIONS_PER_FRAME: 1,
+        GRASS_MUTATION_RATE: 1 / 255,
+        GRASS_GROW_RATE: 1 / 255,
+        HERBIVORE_STEP_RATE: 1 / 255,
+        // Actual apawn rate is 10% of this constant
+        HERBIVORE_SPAWN_RATE: 1 / 255,
+        HERBIVORE_START_HEALTH: 1 / 255,
+        HERBIVORE_INC_HEALTH: 1 / 255,
+        HERBIVORE_DEC_HEALTH: 1 / 255,
+        HERBIVORE_COLOR_MUTATION_RATE: 1 / 255,
+        HERBIVORE_DISLIKE_RATE: 1 / 255
+      }
+    }
   };
 
 
@@ -151,22 +166,18 @@
   function obtainCanvas() {
     canvas = document.getElementById("main-canvas");
   }
-  function initialize() {
-    obtainCanvas();
-    resizeCanvasBuffer(SIZE, SIZE);
-    initGl();
-    initBuffers();
-    initShaders();
-    initTextures();
-    initFramebuffers();
-    doLayout();
-  }
+
 
   function initTextures() {
-    texPermutation = createPermutation(SEED_SIZE);
-    texRandom = createRandomTexture(SEED_SIZE);
-    texGrassA = [SIZE, SIZE].map(createGrassTexture);
-    texHerbivoreA = [SIZE, SIZE].map(createHerbivoreTexture);
+    texPermutation = createPermutation(SEED_SIZE, texPermutation);
+    texRandom = createRandomTexture(SEED_SIZE, texRandom);
+
+    if (!texGrassA) texGrassA = new Array(2);
+    if (!texHerbivoreA) texHerbivoreA = new Array(2);
+    texGrassA[0] = createGrassTexture(SIZE, texGrassA[0]);
+    texGrassA[1] = createGrassTexture(SIZE, texGrassA[1]);
+    texHerbivoreA[0] = createHerbivoreTexture(SIZE, texHerbivoreA[0]);
+    texHerbivoreA[1] = createHerbivoreTexture(SIZE, texHerbivoreA[1]);
   }
 
   function SwapIndex() {
@@ -189,6 +200,10 @@
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 
+  function randomPermOffset() {
+    return ((Math.random() * (SEED_SIZE - EPS)) |0) / SEED_SIZE;
+  }
+
   function growGrass() {
     gl.bindFramebuffer(gl.FRAMEBUFFER, fbGrassA[index_grass.target]);
 
@@ -206,8 +221,8 @@
     gl.uniform1i(shaderGrassGrow.loc.uTexHerbivore, 2);
 
     var iSIZE = 1 / SIZE;
-    gl.uniform2f(shaderGrassGrow.loc.uSeed, Math.random(), Math.random());
-    gl.uniform2f(shaderGrassGrow.loc.uSeed2, Math.random(), Math.random());
+    gl.uniform2f(shaderGrassGrow.loc.uSeed, randomPermOffset(), randomPermOffset());
+    gl.uniform2f(shaderGrassGrow.loc.uSeed2, randomPermOffset(), randomPermOffset());
     gl.uniform2f(shaderGrassGrow.loc.uPixSize, iSIZE, iSIZE);
     gl.uniform1f(shaderGrassGrow.loc.uSeedRatio, SIZE / SEED_SIZE);
     gl.uniform3f(shaderGrassGrow.loc.uGrassMutationRate,
@@ -240,8 +255,8 @@
     gl.bindTexture(gl.TEXTURE_2D, texGrassA[index_grass.source]);
     gl.uniform1i(shaderHerbivoreMoveSpawn.loc.uTexGrass, 3);
 
-    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uSeed, Math.random(), Math.random());
-    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uSeed2, Math.random(), Math.random());
+    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uSeed, randomPermOffset(), randomPermOffset());
+    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uSeed2, randomPermOffset(), randomPermOffset());
     gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uPixSize, iSIZE, iSIZE);
     gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uSeedRatio, SIZE / SEED_SIZE);
     gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreStepRate,
@@ -321,13 +336,7 @@
     //self.setTimeout(handleFrame, 60);
     self.requestAnimationFrame(handleFrame);
   }
-  function start() {
-    initialize();
 
-
-
-    scheduleCycle();
-  }
 
 
   var PAIR_CONFIG = [[1, -1], [1, 0], [1, 1], [0, 1]];
@@ -335,31 +344,35 @@
     return (Math.random() * (maxExcl - EPS))|0
   }
 
-  function makeDataTex() {
-    var texture = gl.createTexture();
-    gl.bindTexture(gl.TEXTURE_2D, texture);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
-    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+  function makeDataTex(texture) {
+    if (texture === undefined) {
+      texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+    } else {
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+    }
     return texture;
   }
 
-  function createRandomTexture(size) {
+  function createRandomTexture(size, texture) {
     var bitmap = new Uint8Array(size * size * 4);
     var i;
     for (i = 0; i < bitmap.length; ++i) {
         bitmap[i] = randomInt(256);
     }
 
-    var texture = makeDataTex();
+    texture = makeDataTex(texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
       size, size, 0, gl.RGBA,
       gl.UNSIGNED_BYTE, bitmap);
     return texture;
   }
 
-  function createGrassTexture(size) {
+  function createGrassTexture(size, texture) {
     var i;
     var bitmap = new Uint8Array(size * size * 4);
 
@@ -374,14 +387,14 @@
     }
     setc(size-1, size-1, COLOR);
 
-    var texture = makeDataTex();
+    texture = makeDataTex(texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
       size, size, 0, gl.RGBA,
       gl.UNSIGNED_BYTE, bitmap);
     return texture;
   }
 
-  function createHerbivoreTexture(size) {
+  function createHerbivoreTexture(size, texture) {
     var bitmap = new Uint8Array(size * size * 4);
     var i;
     function setc(x, y, c) {
@@ -395,14 +408,18 @@
     }
     setc(0, 0, COLOR);
 
-    var texture = makeDataTex();
+    texture = makeDataTex(texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
       size, size, 0, gl.RGBA,
       gl.UNSIGNED_BYTE, bitmap);
     return texture;
   }
 
-  function createPermutation(size) {
+  function floatToByte(x) {
+    return (x * (256 - EPS))|0;
+  }
+
+  function createPermutation(size, texture) {
     var i, j, k;
     var pcount = size * size;
     var ccount = pcount * 4;
@@ -445,7 +462,7 @@
       var p1 = xget(x0, y0);
       var p2 = xget(x1, y1);
       if (!p1 && !p2) {
-        var w = Math.random();
+        var w = [Math.random(), Math.random(), Math.random()].map(floatToByte);
         xset(x0, y0, [pr[0], pr[1], w, pi, 0]);
         xset(x1, y1, [-pr[0], -pr[1], w, pi, 1]);
       }
@@ -453,26 +470,27 @@
 
 
     var bitmap = new Uint8Array(size * size * 4);
-    var r, g, d;
+    var r, g, b, a, d;
     for (i = 0, k = 0; i < size; i++) {
       for (j = 0; j < size; j++, k += 4) {
         var item = xget(j, i);
         d = 1;
         if (item) {
           r = (item[4] * 4 + item[3]);
-          g = (item[2] * (256 - EPS))|0;
+          g = item[2][0];
+          b = item[2][1];
+          a = item[2][2];
         } else {
-          r = 255;
-          g = 255;
+          r = g = b = a = 255;
         }
         bitmap[k + 0] = r;
         bitmap[k + 1] = g;
-        bitmap[k + 2] = randomInt(256);
-        bitmap[k + 3] = randomInt(256);
+        bitmap[k + 2] = b;
+        bitmap[k + 3] = a;
       }
     }
 
-    var texture = makeDataTex();
+    texture = makeDataTex(texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
       size, size, 0, gl.RGBA,
       gl.UNSIGNED_BYTE, bitmap);
@@ -488,14 +506,14 @@
     "varying vec2 vPosition;",
     "varying vec2 vRandomCoord;",
     "varying vec2 vRandomCoord2;",
-    "uniform mediump vec2 uSeed;",
-    "uniform mediump vec2 uSeed2;",
-    "uniform mediump float uSeedRatio;",
+    "uniform vec2 uSeed;",
+    "uniform vec2 uSeed2;",
+    "uniform float uSeedRatio;",
     "",
     "void main() {",
     "  vPosition = aPosition;",
-    "  vRandomCoord = (aPosition + uSeed) * uSeedRatio;",
-    "  vRandomCoord2 = (aPosition + uSeed2) * uSeedRatio;",
+    "  vRandomCoord = aPosition * uSeedRatio + uSeed;",
+    "  vRandomCoord2 = aPosition * uSeedRatio + uSeed2;",
     "  gl_Position = vec4(",
     "    aPosition.x * 2.0 - 1.0,",
     "    aPosition.y * 2.0 - 1.0,",
@@ -574,7 +592,7 @@
     "}",
     "",
     "bool herbivore_spawns() {",
-    "  return rnd2.y < 0.1 && rnd.w < uHerbivoreSpawnRate;",
+    "  return perm.z < 0.1 && perm.w < uHerbivoreSpawnRate - (0.5 / 255.0);",
     "}",
     "",
     "vec4 herbivore_spawn() {",
@@ -598,7 +616,8 @@
     "  perm = texture2D(uTexPermutation, vRandomCoord);",
     "  gl_FragColor = loc_herbi;",
     "  float disc = perm.x * 255.0;",
-    "  if (disc < 254.5 && perm.y < uHerbivoreStepRate) {",
+    "  bool spawns = herbivore_spawns();",
+    "  if (disc < 254.5 && (perm.y < uHerbivoreStepRate || spawns)) {",
     "    if (disc < 3.5) {",
     "      if (disc < 1.5) {",
     "        if (disc < 0.5) {",
@@ -633,8 +652,8 @@
     "    if (herbivore_lives(loc_herbi)) {",
     "      if (herbivore_lives(rem_herbi)) {",
     "      } else {",
-    "        if (herbivore_spawns()) {",
-    "          gl_FragColor = herbivore_spawn();",
+    "        if (spawns) {",
+    "          // gl_FragColor = herbivore_spawn();",
     "        } else {",
     "          gl_FragColor = vec4(0.0);",
     "        }",
@@ -660,7 +679,6 @@
     "uniform sampler2D uTexRandom;",
     "uniform sampler2D uTexGrass;",
     "uniform sampler2D uTexHerbivore;",
-    "uniform mediump float uSeedRatio;",
     "",
     "const float DARK = 0.0;",
     "const float LIGH = 0.8;",
@@ -773,11 +791,77 @@
     }
   }
 
+  function forEach(obj, fn) {
+    if (obj) {
+      for (var key in obj) {
+        if (obj.hasOwnProperty(key)) {
+          fn(obj[key], key, obj);
+        }
+      }
+    }
+  }
+
+
+  function reset() {
+    initTextures();
+  }
+  function initialize() {
+    resizeCanvasBuffer(SIZE, SIZE);
+    initGl();
+    initBuffers();
+    initShaders();
+    initTextures();
+    initFramebuffers();
+  }
+  function showOptions() {
+    var elem = document.getElementById("options-area");
+    forEach(OPTIONS, function(v, k, o) {
+      if (k.substring(0, 1) !== '$') {
+        var label = document.createElement("label");
+        label.textContent = k;
+        var input = document.createElement("input");
+        input.type = "number";
+        input.step = o.$meta && o.$meta.step && o.$meta.step[k];
+
+        function encode(x) {
+          var unit = o.$meta && o.$meta.unit && o.$meta.unit[k];
+          return (unit !== undefined) ? x * unit : x;
+        }
+        function decode(x) {
+          var unit = o.$meta && o.$meta.unit && o.$meta.unit[k];
+          return (unit !== undefined) ? x / unit : x;
+        }
+
+        input.value = decode(v);
+        input.onchange = function () {
+          OPTIONS[k] = encode(+input.value);
+        };
+
+        elem.appendChild(label);
+        elem.appendChild(document.createElement("br"));
+        elem.appendChild(input);
+        elem.appendChild(document.createElement("br"));
+      }
+    });
+  }
+
+  function start() {
+    obtainCanvas();
+    initialize();
+    doLayout();
+    showOptions();
+
+    scheduleCycle();
+  }
+
+
   window.onresize = doLayout;
+  document.getElementById("btn-reset").onclick = reset;
+
 
   self.OPTIONS = OPTIONS;
   return start();
-})(self, window, Math, Uint8Array, Float32Array);
+})(self, window, document, Math, Uint8Array, Float32Array);
 
 
 
