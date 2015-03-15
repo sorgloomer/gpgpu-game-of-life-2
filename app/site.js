@@ -12,12 +12,12 @@
 
   var EPS = 1e-5;
   var SIZE = 256;
-  var SEED_SIZE = 64;
+  var SEED_SIZE = 8;
   
  
   
   var OPTIONS = {
-    ITERATIONS_PER_FRAME: 50,
+    ITERATIONS_PER_FRAME: 1,
     GRASS_MUTATION_RATE: 6 / 255,
     GRASS_GROW_RATE: 1 / 255,
     HERBIVORE_STEP_RATE: 0.5,
@@ -87,7 +87,8 @@
     ], [
       "uTexGrass"
     ]);
-    shaderHerbivoreMoveSpawn = makeShader(FSHADER_HERBIVORE_ITERATE, VSHADER_COMPUTE, [
+    //shaderHerbivoreMoveSpawn = makeShader(FSHADER_HERBIVORE_ITERATE, VSHADER_COMPUTE, [
+    shaderHerbivoreMoveSpawn = makeShader(FSHADER_HERBIVORE_MOVE, VSHADER_COMPUTE, [
       "aPosition"
     ], [
       "uSeed", "uSeed2", "uSeedRatio", "uPixSize",
@@ -324,7 +325,8 @@
     gl.viewport(0, 0, SIZE, SIZE);
     gl.clearColor(0, 0, 0.2, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
-    renderWorld();
+    //renderWorld();
+    renderHerbivores();
   }
 
 
@@ -333,8 +335,8 @@
     scheduleCycle();
   }
   function scheduleCycle() {
-    //self.setTimeout(handleFrame, 60);
-    self.requestAnimationFrame(handleFrame);
+    self.setTimeout(handleFrame, 500);
+    //self.requestAnimationFrame(handleFrame);
   }
 
 
@@ -401,12 +403,15 @@
       var b = (y * size + x) * 4;
       for (var i = 0; i < 4; i++) bitmap[b + i] = c[i];
     }
+    var hsize = (size/2)|0;
     var COLOR = [0, 255, 0, 255];
+    /*
     for (i = 0; i < 10; i++) {
-      setc(i * 3, 0, COLOR);
-      setc(0, i * 3, COLOR);
+      setc(i * 10 + hsize, +hsize, COLOR);
+      setc(hsize, i * 5 + hsize, COLOR);
     }
-    setc(0, 0, COLOR);
+    */
+    setc(hsize, hsize, COLOR);
 
     texture = makeDataTex(texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
@@ -447,7 +452,7 @@
       xch(i, i + k);
     }
 
-    for (i = 0; i < ccount; i++) {
+    for (i = 0; i < ccount; i+=5) {
       k = perm[i];
       var pi = k % 4;
       k = (k / 4) |0;
@@ -541,9 +546,9 @@
     "void main() {",
     "  vec4 c = texture2D(uTexGrass, vPosition);",
     "  if (c.a > 0.0001) {",
-    "    gl_FragColor = vec4(c.rgb * 0.9, 1.0);",
+    "    gl_FragColor = vec4(c.rgb * 1.0, 1.0);",
     "  } else {",
-    "    gl_FragColor = vec4(0.0);",
+    "    gl_FragColor = vec4(c.rgb * 0.3, 1.0);",
     "  }",
     "}"
   ].join('\n');
@@ -664,6 +669,77 @@
     "      }",
     "    }",
     "  }",
+    "}"
+  ].join('\n');
+
+  var FSHADER_HERBIVORE_MOVE = [
+    "precision mediump float;",
+    "",
+    "varying vec2 vPosition;",
+    "varying vec2 vRandomCoord;",
+    "uniform sampler2D uTexHerbivore;",
+    "uniform sampler2D uTexPermutation;",
+    "uniform vec2 uPixSize;",
+    "uniform float uHerbivoreStepRate;",
+    "",
+    "vec2 step;",
+    "vec4 rnd, rnd2, loc_herbi, rem_herbi, loc_grass, perm;",
+    "",
+    "bool herbivore_lives(vec4 herbi) {",
+    "  return herbi.a > 0.0001;",
+    "}",
+    "",
+    "",
+    "void main() {",
+    "  loc_herbi = texture2D(uTexHerbivore, vPosition);",
+    "  perm = texture2D(uTexPermutation, vRandomCoord);",
+    "  gl_FragColor = loc_herbi;",
+    "  float disc = perm.x * 255.0;",
+    "  if (disc < 254.5 && (perm.y < uHerbivoreStepRate)) {",
+    "    if (disc < 3.5) {",
+    "      if (disc < 1.5) {",
+    "        if (disc < 0.5) {",
+    "          step = vec2( 1.0, -1.0);",
+    "        } else {",
+    "          step = vec2( 1.0,  0.0);",
+    "        }",
+    "      } else {",
+    "        if (disc < 2.5) {",
+    "          step = vec2( 1.0,  1.0);",
+    "        } else {",
+    "          step = vec2( 0.0,  1.0);",
+    "        }",
+    "      }",
+    "    } else {",
+    "      if (disc < 5.5) {",
+    "        if (disc < 4.5) {",
+    "          step = vec2(-1.0,  1.0);",
+    "        } else {",
+    "          step = vec2(-1.0,  0.0);",
+    "        }",
+    "      } else {",
+    "        if (disc < 6.5) {",
+    "          step = vec2(-1.0, -1.0);",
+    "        } else {",
+    "          step = vec2( 0.0, -1.0);",
+    "        }",
+    "      }",
+    "    }",
+    "",
+    "    rem_herbi = texture2D(uTexHerbivore, vPosition + step * uPixSize);",
+    "    if (herbivore_lives(loc_herbi)) {",
+    "      if (herbivore_lives(rem_herbi)) {",
+    "      } else {",
+    "        gl_FragColor = vec4(0.0);",
+    "      }",
+    "    } else {",
+    "      if (herbivore_lives(rem_herbi)) {",
+    "        gl_FragColor = rem_herbi;",
+    "      }",
+    "    }",
+    "  }",
+    "  gl_FragColor.r = fract(vRandomCoord.x * 0.5) < 0.5 ? 1.0 : 0.5;",
+    "  gl_FragColor.g = fract(vRandomCoord.y * 0.5) < 0.5 ? 1.0 : 0.5;",
     "}"
   ].join('\n');
 
