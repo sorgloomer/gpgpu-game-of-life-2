@@ -11,13 +11,13 @@
   var fbGrassA, fbHerbivoreA;
 
   var EPS = 1e-5;
-  var SIZE = 256;
-  var SEED_SIZE = 8;
+  var SIZE = 128;
+  var SEED_SIZE = 16;
   
  
   
   var OPTIONS = {
-    ITERATIONS_PER_FRAME: 1,
+    ITERATIONS_PER_FRAME: 20,
     GRASS_MUTATION_RATE: 6 / 255,
     GRASS_GROW_RATE: 1 / 255,
     HERBIVORE_STEP_RATE: 0.5,
@@ -282,6 +282,20 @@
     index_herbivore.swap();
   }
 
+  var MAPARRAY = new Uint8Array(SIZE * SIZE * 4);
+  function countHerbi() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbHerbivoreA[index_herbivore.source]);
+    gl.readPixels(0, 0, SIZE, SIZE, gl.RGBA, gl.UNSIGNED_BYTE, MAPARRAY);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+    var count = 0;
+    for (var i = 3; i < MAPARRAY.length; i += 4) {
+      if (MAPARRAY[i] > 0) count++;
+    }
+    return count;
+  }
+
+
   function renderGrass() {
     gl.useProgram(shaderGrassRender.program);
 
@@ -319,6 +333,12 @@
     for (var i = 0; i < OPTIONS.ITERATIONS_PER_FRAME; i++) {
       growGrass();
       moveSpawnHerbivores();
+      var cnt = countHerbi();
+      if (cnt !== 1) {
+        console.log(cnt);
+        OPTIONS.ITERATIONS_PER_FRAME = 0;
+        break;
+      }
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -335,8 +355,8 @@
     scheduleCycle();
   }
   function scheduleCycle() {
-    self.setTimeout(handleFrame, 500);
-    //self.requestAnimationFrame(handleFrame);
+    // self.setTimeout(handleFrame, 500);
+    self.requestAnimationFrame(handleFrame);
   }
 
 
@@ -405,12 +425,14 @@
     }
     var hsize = (size/2)|0;
     var COLOR = [0, 255, 0, 255];
+
     /*
-    for (i = 0; i < 10; i++) {
-      setc(i * 10 + hsize, +hsize, COLOR);
-      setc(hsize, i * 5 + hsize, COLOR);
+    for (i = 0; i < 20; i++) {
+      setc(i * 3 + hsize, +hsize, COLOR);
+      setc(hsize, i * 3 + hsize, COLOR);
     }
     */
+
     setc(hsize, hsize, COLOR);
 
     texture = makeDataTex(texture);
@@ -424,6 +446,10 @@
     return (x * (256 - EPS))|0;
   }
 
+  function mod(divident, modulus) {
+    return ((divident % modulus) + modulus) % modulus;
+  }
+
   function createPermutation(size, texture) {
     var i, j, k;
     var pcount = size * size;
@@ -432,10 +458,10 @@
     var perm = new Uint32Array(ccount);
 
     function xget(x, y) {
-      return array[(x % size) + (y % size) * size];
+      return array[mod(x, size) + mod(y, size) * size];
     }
     function xset(x, y, v) {
-      return array[(x % size) + (y % size) * size] = v;
+      return array[mod(x, size) + mod(y, size) * size] = v;
     }
 
     function xch(i, j) {
@@ -452,7 +478,7 @@
       xch(i, i + k);
     }
 
-    for (i = 0; i < ccount; i+=5) {
+    for (i = 0; i < ccount; ++i) {
       k = perm[i];
       var pi = k % 4;
       k = (k / 4) |0;
