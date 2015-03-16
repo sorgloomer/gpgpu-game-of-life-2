@@ -6,20 +6,21 @@
   var shaderHerbivoreRender, shaderWorldRender;
 
   var vbSquere;
-  var texRandom, texPermutation;
+  var texRandom, texPermutation, texGrassRandom;
   var texGrassA, texHerbivoreA;
   var fbGrassA, fbHerbivoreA;
 
   var EPS = 1e-5;
-  var SIZE = 256;
-  var SEED_SIZE = 64;
+  var EPS_TO_256 = 256 - EPS;
+  var SIZE = 512;
+  var SEED_SIZE = 128;
   
  
   
   var OPTIONS = {
     ITERATIONS_PER_FRAME: 50,
     GRASS_MUTATION_RATE: 6 / 255,
-    GRASS_GROW_RATE: 1 / 255,
+    GRASS_GROW_RATE: 10 / 255,
     HERBIVORE_STEP_RATE: 0.5,
     // Actual apawn rate is 10% of this constant
     HERBIVORE_SPAWN_RATE: 0 / 255,
@@ -171,6 +172,7 @@
   function initTextures() {
     texPermutation = createPermutation(SEED_SIZE, texPermutation);
     texRandom = createRandomTexture(SEED_SIZE, texRandom);
+    texGrassRandom = createGrassRandomTexture(SEED_SIZE, 50, texGrassRandom);
 
     if (!texGrassA) texGrassA = new Array(2);
     if (!texHerbivoreA) texHerbivoreA = new Array(2);
@@ -213,7 +215,7 @@
     gl.bindTexture(gl.TEXTURE_2D, texGrassA[index_grass.source]);
     gl.uniform1i(shaderGrassGrow.loc.uTexGrass, 0);
     gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, texRandom);
+    gl.bindTexture(gl.TEXTURE_2D, texGrassRandom);
     gl.uniform1i(shaderGrassGrow.loc.uTexRandom, 1);
     gl.activeTexture(gl.TEXTURE2);
     // use target buffer, which contains the last state of herbivores, thus delayed with one iteration
@@ -372,18 +374,44 @@
     return texture;
   }
 
+  function createGrassRandomTexture(size, base, texture) {
+    var bitmap = new Uint8Array(size * size * 4);
+    var i, coeffa = base - 1, coeffb = 1 / (1 - base), coeffc = 1 / Math.log(base);
+
+    function randomDistr() {
+      var unif = Math.random();
+      var dist = Math.log(coeffa * (unif - coeffb)) * coeffc;
+      return Math.floor(dist * EPS_TO_256);
+    }
+
+    for (i = 0; i < bitmap.length; i += 4) {
+      bitmap[i] = randomInt(256);
+      bitmap[i+1] = randomInt(256);
+      bitmap[i+2] = randomInt(256);
+      bitmap[i+3] = randomDistr();
+    }
+
+    texture = makeDataTex(texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
+      size, size, 0, gl.RGBA,
+      gl.UNSIGNED_BYTE, bitmap);
+    return texture;
+  }
+
   function createGrassTexture(size, texture) {
-    var i;
+    var i, j;
     var bitmap = new Uint8Array(size * size * 4);
 
     function setc(x, y, c) {
       var b = (y * size + x) * 4;
       for (var i = 0; i < 4; i++) bitmap[b + i] = c[i];
     }
+    var psize = (size / 2)|0;
     var COLOR = [0, 255, 0, 255];
-    for (i = 0; i < 100; i++) {
-      setc(i, 0, COLOR);
-      setc(0, i, COLOR);
+    for (i = 0; i < psize; i += 5) {
+      for (j = 0; j < psize; j += 5) {
+        setc(i, j, COLOR);
+      }
     }
     setc(size-1, size-1, COLOR);
 
@@ -416,7 +444,7 @@
   }
 
   function floatToByte(x) {
-    return (x * (256 - EPS))|0;
+    return (x * EPS_TO_256)|0;
   }
 
   function mod(divident, modulus) {
@@ -691,7 +719,7 @@
     "vec4 rnd, rnd2, herbi, grass;",
     "",
     "vec3 mutateColor(vec3 c) {",
-    "  return clamp(c.rgb + (rnd.xyz * 2.0 - vec3(1.0)) * uGrassMutationRate, 0.0, 1.0);",
+    "  return clamp(c.rgb + (rnd.rgb * 2.0 - vec3(1.0)) * uGrassMutationRate, 0.0, 1.0);",
     "}",
     "",
     "void grow(vec4 c) {",
@@ -710,8 +738,8 @@
     "  gl_FragColor = grass;",
     "  rnd = texture2D(uTexRandom, vRandomCoord);",
     "  rnd2 = texture2D(uTexRandom, vRandomCoord2);",
-    "  if (grass.a * 255.0 < 254.5 && rnd2.x < uGrassGrowRate) {",
-    "    float disc = rnd.w * 255.0 / 16.0;",
+    "  if (grass.a * 255.0 < 254.5 && rnd2.a < uGrassGrowRate) {",
+    "    float disc = rnd2.r * 255.0 / 16.0;",
     "    g[0] = texture2D(uTexGrass, vPosition + vec2(        0.0, -uPixSize.y));",
     "    g[1] = texture2D(uTexGrass, vPosition + vec2( uPixSize.x, -uPixSize.y));",
     "    g[2] = texture2D(uTexGrass, vPosition + vec2( uPixSize.x,         0.0));",
