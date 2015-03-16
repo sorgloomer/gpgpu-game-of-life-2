@@ -419,6 +419,10 @@
     return (x * (256 - EPS))|0;
   }
 
+  function mod(divident, modulus) {
+    return ((divident % modulus) + modulus) % modulus;
+  }
+
   function createPermutation(size, texture) {
     var i, j, k;
     var pcount = size * size;
@@ -427,10 +431,10 @@
     var perm = new Uint32Array(ccount);
 
     function xget(x, y) {
-      return array[(x % size) + (y % size) * size];
+      return array[mod(x, size) + mod(y, size) * size];
     }
     function xset(x, y, v) {
-      return array[(x % size) + (y % size) * size] = v;
+      return array[mod(x, size) + mod(y, size) * size] = v;
     }
 
     function xch(i, j) {
