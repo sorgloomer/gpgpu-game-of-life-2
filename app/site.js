@@ -12,7 +12,7 @@
 
   var EPS = 1e-5;
   var EPS_TO_256 = 256 - EPS;
-  var SIZE = 512;
+  var SIZE = 256;
   var SEED_SIZE = 128;
   
  
@@ -56,9 +56,17 @@
     this.loc = {};
   }
 
+  function resizeCanvasStyle(w, h) {
+    canvas.style.width = "" + w + "px";
+    canvas.style.height = "" + h + "px";
+  }
   function resizeCanvasBuffer(w, h) {
     canvas.width = w;
     canvas.height = h;
+  }
+  function resizeCanvas(w, h) {
+    resizeCanvasBuffer(w, h);
+    resizeCanvasStyle(w, h);
   }
   function error(e) {
     console.error(e);
@@ -317,13 +325,14 @@
   }
 
   function cycle() {
+    gl.viewport(0, 0, SIZE, SIZE);
     for (var i = 0; i < OPTIONS.ITERATIONS_PER_FRAME; i++) {
       growGrass();
       moveSpawnHerbivores();
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    gl.viewport(0, 0, SIZE, SIZE);
+    gl.viewport(0, 0, canvas.width, canvas.height);
     gl.clearColor(0, 0, 0.2, 1);
     gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
     renderWorld();
@@ -818,8 +827,7 @@
     if (canvas) {
       var margin = 20;
       var size = Math.min(window.innerWidth - margin, window.innerHeight - margin);
-      canvas.style.width = "" + size + "px";
-      canvas.style.height = "" + size + "px";
+      resizeCanvas(size, size);
     }
   }
 
@@ -838,7 +846,7 @@
     initTextures();
   }
   function initialize() {
-    resizeCanvasBuffer(SIZE, SIZE);
+    resizeCanvas(SIZE, SIZE);
     initGl();
     initBuffers();
     initShaders();
