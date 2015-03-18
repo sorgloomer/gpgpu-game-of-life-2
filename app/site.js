@@ -18,19 +18,21 @@
  
   
   var OPTIONS = {
+    RENDER_MODE: 0,
     ITERATIONS_PER_FRAME: 50,
     GRASS_MUTATION_RATE: 6 / 255,
     GRASS_GROW_RATE: 10 / 255,
-    HERBIVORE_STEP_RATE: 0.5,
+    HERBIVORE_STEP_RATE: 1.0,
     // Actual apawn rate is 10% of this constant
-    HERBIVORE_SPAWN_RATE: 0 / 255,
+    HERBIVORE_SPAWN_RATE: 5 / 255,
     HERBIVORE_START_HEALTH: 50 / 255,
-    HERBIVORE_INC_HEALTH: 0 / 255,
-    HERBIVORE_DEC_HEALTH: 0 / 255,
-    HERBIVORE_COLOR_MUTATION_RATE: 1 / 255,
-    HERBIVORE_DISLIKE_RATE: 0.2,
+    HERBIVORE_INC_HEALTH: 30 / 255,
+    HERBIVORE_DEC_HEALTH: 2 / 255,
+    HERBIVORE_COLOR_MUTATION_RATE: 8 / 255,
+    HERBIVORE_DISLIKE_RATE: 0.6,
     $meta: {
       unit: {
+        RENDER_MODE: 1,
         ITERATIONS_PER_FRAME: 1,
         GRASS_MUTATION_RATE: 1 / 255,
         GRASS_GROW_RATE: 1 / 255,
@@ -112,7 +114,7 @@
     shaderWorldRender = makeShader(FSHADER_WORLD_RENDER, VSHADER_COMPUTE, [
       "aPosition"
     ], [
-      "uTexHerbivore", "uTexGrass"
+      "uTexHerbivore", "uTexGrass", "uRenderMode"
     ]);
   }
 
@@ -320,6 +322,8 @@
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, texHerbivoreA[index_herbivore.source]);
     gl.uniform1i(shaderWorldRender.loc.uTexHerbivore, 1);
+
+    gl.uniform1i(shaderWorldRender.loc.uRenderMode, OPTIONS.RENDER_MODE);
 
     drawSquare(shaderWorldRender);
   }
@@ -593,15 +597,42 @@
     "varying vec2 vPosition;",
     "uniform sampler2D uTexGrass;",
     "uniform sampler2D uTexHerbivore;",
+    "uniform int uRenderMode;",
+    "const vec4 WHITE = vec4(1.0, 1.0, 1.0, 1.0);",
+    "const vec4 BLACK = vec4(0.0, 0.0, 0.0, 1.0);",
+    "const vec4 BROWN = vec4(0.3, 0.2, 0.1, 1.0);",
+    "const vec4 TRANS = vec4(0.0, 0.0, 0.0, 0.0);",
     "void main() {",
     "  vec4 g = texture2D(uTexGrass, vPosition);",
     "  vec4 h = texture2D(uTexHerbivore, vPosition);",
-    "  if (h.a > 0.0) {",
-    "    gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0);",
-    "  } else if (g.a > 0.0) {",
-    "    gl_FragColor = vec4(0.1 + g.rgb * 0.9, 1.0);",
+    "  if (uRenderMode == 0) {",
+    "    if (h.a > 0.0) {",
+    "      gl_FragColor = WHITE;",
+    "    } else if (g.a > 0.0) {",
+    "      gl_FragColor = vec4(0.1 + g.rgb * 0.9, 1.0);",
+    "    } else {",
+    "      gl_FragColor = BLACK;",
+    "    }",
+    "  } else if (uRenderMode == 1) {",
+    "    if (h.a > 0.0) {",
+    "      gl_FragColor = vec4(h.rgb, 1.0);",
+    "    } else {",
+    "      gl_FragColor = BLACK;",
+    "    }",
+    "  } else if (uRenderMode == 2) {",
+    "    if (h.a > 0.0) {",
+    "      gl_FragColor = vec4(2.0 * (1.0 - h.a), 2.0 * h.a, 0.0, 1.0);",
+    "    } else {",
+    "      gl_FragColor = BLACK;",
+    "    }",
+    "  } else if (uRenderMode == 3) {",
+    "    if (g.a > 0.0) {",
+    "      gl_FragColor = vec4(g.rgb, 1.0);",
+    "    } else {",
+    "      gl_FragColor = BLACK;",
+    "    }",
     "  } else {",
-    "    gl_FragColor = vec4(0.0);",
+    "      gl_FragColor = BROWN;",
     "  }",
     "}"
   ].join('\n');
@@ -694,7 +725,7 @@
     "      if (herbivore_lives(rem_herbi)) {",
     "      } else {",
     "        if (spawns) {",
-    "          // gl_FragColor = herbivore_spawn();",
+    "          gl_FragColor = herbivore_spawn();",
     "        } else {",
     "          gl_FragColor = vec4(0.0);",
     "        }",
