@@ -1,14 +1,15 @@
 
-(function(self, window, document, Math, Uint8Array, Float32Array){
+(function(self, window, document, Math, Uint8Array, Float32Array, SHADERS){
   var canvas, gl;
 
-  var shaderGrassGrow, shaderGrassRender, shaderHerbivoreMoveSpawn;
-  var shaderHerbivoreRender, shaderWorldRender;
+  var shaderGrassGrow, shaderGrassRender, shaderHerbivoreIterate;
+  var shaderHerbivoreRender, shaderWorldRender, shaderHerbivoreEat;
+  var shaderGrassApplyEat, shaderHerbivoreApplyEat;
 
   var vbSquere;
-  var texRandom, texPermutation, texGrassRandom;
+  var texRandom, texPermutation, texGrassRandom, texTemp, texDeltas;
   var texGrassA, texHerbivoreA;
-  var fbGrassA, fbHerbivoreA;
+  var fbGrassA, fbHerbivoreA, fbTemp;
 
   var EPS = 1e-5;
   var EPS_TO_256 = 256 - EPS;
@@ -29,7 +30,7 @@
     HERBIVORE_INC_HEALTH: 30 / 255,
     HERBIVORE_DEC_HEALTH: 2 / 255,
     HERBIVORE_COLOR_MUTATION_RATE: 8 / 255,
-    HERBIVORE_DISLIKE_RATE: 0.6,
+    HERBIVORE_DISLIKE_RATE: 0.2,
     $meta: {
       unit: {
         RENDER_MODE: 1,
@@ -37,7 +38,7 @@
         GRASS_MUTATION_RATE: 1 / 255,
         GRASS_GROW_RATE: 1 / 255,
         HERBIVORE_STEP_RATE: 1 / 255,
-        // Actual apawn rate is 10% of this constant
+        // Actual spawn rate is 10% of this constant
         HERBIVORE_SPAWN_RATE: 1 / 255,
         HERBIVORE_START_HEALTH: 1 / 255,
         HERBIVORE_INC_HEALTH: 1 / 255,
@@ -86,35 +87,52 @@
   }
 
   function initShaders() {
-    shaderGrassGrow = makeShader(FSHADER_GRASS_GROW, VSHADER_COMPUTE, [
+    shaderGrassGrow = makeShader(SHADERS.FSHADER_GRASS_GROW, SHADERS.VSHADER_COMPUTE, [
       "aPosition"
     ], [
       "uSeed", "uSeed2", "uSeedRatio", "uPixSize",
-      "uTexGrass", "uTexRandom", "uTexHerbivore",
+      "uTexGrass", "uTexRandom", "uTexHerbivore", "uTexDeltas",
       "uGrassMutationRate", "uGrassGrowRate"
     ]);
-    shaderGrassRender = makeShader(FSHADER_GRASS_RENDER, VSHADER_COMPUTE, [
+    shaderGrassRender = makeShader(SHADERS.FSHADER_GRASS_RENDER, SHADERS.VSHADER_COMPUTE, [
       "aPosition"
     ], [
       "uTexGrass"
     ]);
-    shaderHerbivoreMoveSpawn = makeShader(FSHADER_HERBIVORE_ITERATE, VSHADER_COMPUTE, [
+    shaderHerbivoreIterate = makeShader(SHADERS.FSHADER_HERBIVORE_ITERATE, SHADERS.VSHADER_COMPUTE, [
       "aPosition"
     ], [
       "uSeed", "uSeed2", "uSeedRatio", "uPixSize",
       "uTexHerbivore", "uTexRandom", "uTexPermutation", "uTexGrass",
       "uHerbivoreStepRate", "uHerbivoreSpawnRate", "uHerbivoreColorMutationRate",
-      "uHerbivoreStartHealth", "uHerbivoreIncHealth", "uHerbivoreDecHealth", "uHerbivoreDislikeRate"
+      "uHerbivoreStartHealth", "uHerbivoreDecHealth"
     ]);
-    shaderHerbivoreRender = makeShader(FSHADER_HERBIVORE_RENDER, VSHADER_COMPUTE, [
+    shaderHerbivoreEat = makeShader(SHADERS.FSHADER_HERBIVORE_EAT, SHADERS.VSHADER_COMPUTE, [
+      "aPosition"
+    ], [
+      "uSeed", "uSeedRatio", "uPixSize",
+      "uTexHerbivore", "uTexRandom", "uTexGrass",
+      "uHerbivoreDislikeRate"
+    ]);
+    shaderHerbivoreApplyEat = makeShader(SHADERS.FSHADER_HERBIVORE_APPLY_EAT, SHADERS.VSHADER_COMPUTE, [
+      "aPosition"
+    ], [
+      "uTexHerbivore", "uTexTemp", "uHerbivoreIncHealth"
+    ]);
+    shaderGrassApplyEat = makeShader(SHADERS.FSHADER_GRASS_APPLY_EAT, SHADERS.VSHADER_COMPUTE, [
+      "aPosition"
+    ], [
+      "uTexGrass", "uTexTemp"
+    ]);
+    shaderHerbivoreRender = makeShader(SHADERS.FSHADER_HERBIVORE_RENDER, SHADERS.VSHADER_COMPUTE, [
       "aPosition"
     ], [
       "uTexHerbivore"
     ]);
-    shaderWorldRender = makeShader(FSHADER_WORLD_RENDER, VSHADER_COMPUTE, [
+    shaderWorldRender = makeShader(SHADERS.FSHADER_WORLD_RENDER, SHADERS.VSHADER_COMPUTE, [
       "aPosition"
     ], [
-      "uTexHerbivore", "uTexGrass", "uRenderMode"
+      "uTexHerbivore", "uTexGrass", "uTexTemp", "uRenderMode"
     ]);
   }
 
@@ -170,6 +188,7 @@
     return fb;
   }
   function initFramebuffers() {
+    fbTemp = tex_to_framebuffer(texTemp);
     fbGrassA = texGrassA.map(tex_to_framebuffer);
     fbHerbivoreA = texHerbivoreA.map(tex_to_framebuffer);
   }
@@ -184,21 +203,31 @@
     texRandom = createRandomTexture(SEED_SIZE, texRandom);
     texGrassRandom = createGrassRandomTexture(SEED_SIZE, 50, texGrassRandom);
 
+    texDeltas = createDeltasTexture(texDeltas);
+
     if (!texGrassA) texGrassA = new Array(2);
     if (!texHerbivoreA) texHerbivoreA = new Array(2);
     texGrassA[0] = createGrassTexture(SIZE, texGrassA[0]);
-    texGrassA[1] = createGrassTexture(SIZE, texGrassA[1]);
+    texGrassA[1] = createEmptyTexture(SIZE, texGrassA[1]);
     texHerbivoreA[0] = createHerbivoreTexture(SIZE, texHerbivoreA[0]);
-    texHerbivoreA[1] = createHerbivoreTexture(SIZE, texHerbivoreA[1]);
+    texHerbivoreA[1] = createEmptyTexture(SIZE, texHerbivoreA[1]);
+    texTemp = createEmptyTexture(SIZE, texTemp);
+
+    index_grass.reset();
+    index_herbivore.reset();
   }
 
   function SwapIndex() {
-    this.target = 0;
-    this.source = 1;
+    this.target = 1;
+    this.source = 0;
   }
   SwapIndex.prototype.swap = function swap() {
     this.target = this.source;
     this.source = this.source ? 0 : 1;
+  };
+  SwapIndex.prototype.reset = function reset() {
+    this.target = 1;
+    this.source = 0;
   };
 
 
@@ -224,13 +253,20 @@
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texGrassA[index_grass.source]);
     gl.uniform1i(shaderGrassGrow.loc.uTexGrass, 0);
+
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, texGrassRandom);
     gl.uniform1i(shaderGrassGrow.loc.uTexRandom, 1);
+
     gl.activeTexture(gl.TEXTURE2);
     // use target buffer, which contains the last state of herbivores, thus delayed with one iteration
     gl.bindTexture(gl.TEXTURE_2D, texHerbivoreA[index_herbivore.target]);
     gl.uniform1i(shaderGrassGrow.loc.uTexHerbivore, 2);
+
+    gl.activeTexture(gl.TEXTURE3);
+    // use target buffer, which contains the last state of herbivores, thus delayed with one iteration
+    gl.bindTexture(gl.TEXTURE_2D, texDeltas);
+    gl.uniform1i(shaderGrassGrow.loc.uTexDeltas, 3);
 
     var iSIZE = 1 / SIZE;
     gl.uniform2f(shaderGrassGrow.loc.uSeed, randomPermOffset(), randomPermOffset());
@@ -248,49 +284,111 @@
     index_grass.swap();
   }
 
-  function moveSpawnHerbivores() {
-    gl.bindFramebuffer(gl.FRAMEBUFFER, fbHerbivoreA[index_herbivore.target]);
 
-    gl.useProgram(shaderHerbivoreMoveSpawn.program);
+  function iterateHerbivores() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbHerbivoreA[index_herbivore.target]);
+    gl.useProgram(shaderHerbivoreIterate.program);
 
     var iSIZE = 1 / SIZE;
+
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, texHerbivoreA[index_herbivore.source]);
-    gl.uniform1i(shaderHerbivoreMoveSpawn.loc.uTexHerbivore, 0);
+    gl.uniform1i(shaderHerbivoreIterate.loc.uTexHerbivore, 0);
+
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, texRandom);
-    gl.uniform1i(shaderHerbivoreMoveSpawn.loc.uTexRandom, 1);
+    gl.uniform1i(shaderHerbivoreIterate.loc.uTexRandom, 1);
+
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, texPermutation);
-    gl.uniform1i(shaderHerbivoreMoveSpawn.loc.uTexPermutation, 2);
+    gl.uniform1i(shaderHerbivoreIterate.loc.uTexPermutation, 2);
+
     gl.activeTexture(gl.TEXTURE3);
     gl.bindTexture(gl.TEXTURE_2D, texGrassA[index_grass.source]);
-    gl.uniform1i(shaderHerbivoreMoveSpawn.loc.uTexGrass, 3);
+    gl.uniform1i(shaderHerbivoreIterate.loc.uTexGrass, 3);
 
-    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uSeed, randomPermOffset(), randomPermOffset());
-    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uSeed2, randomPermOffset(), randomPermOffset());
-    gl.uniform2f(shaderHerbivoreMoveSpawn.loc.uPixSize, iSIZE, iSIZE);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uSeedRatio, SIZE / SEED_SIZE);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreStepRate,
+    gl.uniform2f(shaderHerbivoreIterate.loc.uSeed, randomPermOffset(), randomPermOffset());
+    gl.uniform2f(shaderHerbivoreIterate.loc.uSeed2, randomPermOffset(), randomPermOffset());
+    gl.uniform2f(shaderHerbivoreIterate.loc.uPixSize, iSIZE, iSIZE);
+    gl.uniform1f(shaderHerbivoreIterate.loc.uSeedRatio, SIZE / SEED_SIZE);
+    gl.uniform1f(shaderHerbivoreIterate.loc.uHerbivoreStepRate,
       OPTIONS.HERBIVORE_STEP_RATE);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreSpawnRate,
+    gl.uniform1f(shaderHerbivoreIterate.loc.uHerbivoreSpawnRate,
       OPTIONS.HERBIVORE_SPAWN_RATE);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreStartHealth,
+    gl.uniform1f(shaderHerbivoreIterate.loc.uHerbivoreStartHealth,
       OPTIONS.HERBIVORE_START_HEALTH);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreIncHealth,
-      OPTIONS.HERBIVORE_INC_HEALTH);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreDecHealth,
+    gl.uniform1f(shaderHerbivoreIterate.loc.uHerbivoreDecHealth,
       OPTIONS.HERBIVORE_DEC_HEALTH);
-    gl.uniform1f(shaderHerbivoreMoveSpawn.loc.uHerbivoreDislikeRate,
-      OPTIONS.HERBIVORE_DISLIKE_RATE);
-    gl.uniform3f(shaderHerbivoreMoveSpawn.loc.uHerbivoreColorMutationRate,
+    gl.uniform3f(shaderHerbivoreIterate.loc.uHerbivoreColorMutationRate,
       OPTIONS.HERBIVORE_COLOR_MUTATION_RATE,
       OPTIONS.HERBIVORE_COLOR_MUTATION_RATE,
       OPTIONS.HERBIVORE_COLOR_MUTATION_RATE
     );
 
-    drawSquare(shaderHerbivoreMoveSpawn);
+    drawSquare(shaderHerbivoreIterate);
     index_herbivore.swap();
+  }
+
+  function eatHerbivores() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbTemp);
+
+    gl.useProgram(shaderHerbivoreEat.program);
+
+    var iSIZE = 1 / SIZE;
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texHerbivoreA[index_herbivore.source]);
+    gl.uniform1i(shaderHerbivoreEat.loc.uTexHerbivore, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texRandom);
+    gl.uniform1i(shaderHerbivoreEat.loc.uTexRandom, 1);
+
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, texGrassA[index_grass.source]);
+    gl.uniform1i(shaderHerbivoreEat.loc.uTexGrass, 3);
+
+    gl.uniform2f(shaderHerbivoreEat.loc.uSeed, randomPermOffset(), randomPermOffset());
+    gl.uniform2f(shaderHerbivoreEat.loc.uPixSize, iSIZE, iSIZE);
+    gl.uniform1f(shaderHerbivoreEat.loc.uSeedRatio, SIZE / SEED_SIZE);
+    gl.uniform1f(shaderHerbivoreEat.loc.uHerbivoreDislikeRate,
+      OPTIONS.HERBIVORE_DISLIKE_RATE);
+
+    drawSquare(shaderHerbivoreEat);
+  }
+  function applyEatHerbivores() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbHerbivoreA[index_herbivore.target]);
+    gl.useProgram(shaderHerbivoreApplyEat.program);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texHerbivoreA[index_herbivore.source]);
+    gl.uniform1i(shaderHerbivoreApplyEat.loc.uTexHerbivore, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texTemp);
+    gl.uniform1i(shaderHerbivoreApplyEat.loc.uTexTemp, 1);
+
+    gl.uniform1f(shaderHerbivoreApplyEat.loc.uHerbivoreIncHealth,
+      OPTIONS.HERBIVORE_INC_HEALTH);
+
+    drawSquare(shaderHerbivoreApplyEat);
+    index_herbivore.swap();
+  }
+
+  function applyEatGrass() {
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbGrassA[index_grass.target]);
+    gl.useProgram(shaderGrassApplyEat.program);
+
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, texGrassA[index_grass.source]);
+    gl.uniform1i(shaderGrassApplyEat.loc.uTexGrass, 0);
+
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, texTemp);
+    gl.uniform1i(shaderGrassApplyEat.loc.uTexTemp, 1);
+
+    drawSquare(shaderGrassApplyEat);
+    index_grass.swap();
   }
 
   function renderGrass() {
@@ -322,17 +420,26 @@
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, texHerbivoreA[index_herbivore.source]);
     gl.uniform1i(shaderWorldRender.loc.uTexHerbivore, 1);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, texTemp);
+    gl.uniform1i(shaderWorldRender.loc.uTexTemp, 2);
 
     gl.uniform1i(shaderWorldRender.loc.uRenderMode, OPTIONS.RENDER_MODE);
 
     drawSquare(shaderWorldRender);
   }
 
+  function cycleIteration() {
+    growGrass();
+    iterateHerbivores();
+    eatHerbivores();
+    applyEatHerbivores();
+    applyEatGrass();
+  }
   function cycle() {
     gl.viewport(0, 0, SIZE, SIZE);
     for (var i = 0; i < OPTIONS.ITERATIONS_PER_FRAME; i++) {
-      growGrass();
-      moveSpawnHerbivores();
+      cycleIteration();
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
@@ -386,6 +493,11 @@
       gl.UNSIGNED_BYTE, bitmap);
     return texture;
   }
+  function createEmptyTexture(size, texture) {
+    texture = makeDataTex(texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, size, size, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    return texture;
+  }
 
   function createGrassRandomTexture(size, base, texture) {
     var bitmap = new Uint8Array(size * size * 4);
@@ -411,6 +523,29 @@
     return texture;
   }
 
+  function createDeltasTexture(texture) {
+    var IDENTITY = [ 1, 0, 2, 0, 2, 1, 2, 2, 1, 2, 0, 2, 0, 1, 0, 0 ];
+    var bitmap = new Uint8Array(4 * 8 * 4), i, j;
+    for (i = 0; i < 8; i++) {
+      for (j = 0; j < 8; j++) {
+        bitmap[16 * i + 2 * j + 0] = IDENTITY[2 * ((i + j) & 7) + 0];
+        bitmap[16 * i + 2 * j + 1] = IDENTITY[2 * ((i + j) & 7) + 1];
+      }
+    }
+    for (i = 0; i < 8; i++) {
+      for (j = 0; j < 8; j++) {
+        bitmap[16 * 8 + 16 * i + 2 * j + 0] = IDENTITY[2 * ((i - j) & 7) + 0];
+        bitmap[16 * 8 + 16 * i + 2 * j + 1] = IDENTITY[2 * ((i - j) & 7) + 1];
+      }
+    }
+
+    texture = makeDataTex(texture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
+      4, 8, 0, gl.RGBA,
+      gl.UNSIGNED_BYTE, bitmap);
+    return texture;
+  }
+
   function createGrassTexture(size, texture) {
     var i, j;
     var bitmap = new Uint8Array(size * size * 4);
@@ -420,13 +555,13 @@
       for (var i = 0; i < 4; i++) bitmap[b + i] = c[i];
     }
     var psize = (size / 2)|0;
-    var COLOR = [0, 255, 0, 255];
+    var GREEN = [0, 255, 0, 255];
     for (i = 0; i < psize; i += 5) {
       for (j = 0; j < psize; j += 5) {
-        setc(i, j, COLOR);
+        setc(i, j, GREEN);
       }
     }
-    setc(size-1, size-1, COLOR);
+    setc(size-1, size-1, GREEN);
 
     texture = makeDataTex(texture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA,
@@ -442,7 +577,7 @@
       var b = (y * size + x) * 4;
       for (var i = 0; i < 4; i++) bitmap[b + i] = c[i];
     }
-    var COLOR = [0, 255, 0, 255];
+    var COLOR = [0, 255, 0, (OPTIONS.HERBIVORE_START_HEALTH * 255)|0];
     for (i = 0; i < 10; i++) {
       setc(i * 3, 0, COLOR);
       setc(0, i * 3, COLOR);
@@ -542,318 +677,6 @@
     return texture;
   }
 
-
-
-  var VSHADER_COMPUTE = [
-    "precision highp float;",
-    "",
-    "attribute vec2 aPosition;",
-    "varying vec2 vPosition;",
-    "varying vec2 vRandomCoord;",
-    "varying vec2 vRandomCoord2;",
-    "uniform vec2 uSeed;",
-    "uniform vec2 uSeed2;",
-    "uniform float uSeedRatio;",
-    "",
-    "void main() {",
-    "  vPosition = aPosition;",
-    "  vRandomCoord = aPosition * uSeedRatio + uSeed;",
-    "  vRandomCoord2 = aPosition * uSeedRatio + uSeed2;",
-    "  gl_Position = vec4(",
-    "    aPosition.x * 2.0 - 1.0,",
-    "    aPosition.y * 2.0 - 1.0,",
-    "    0.0, 1.0);",
-    "}"
-  ].join('\n');
-  var FSHADER_GRASS_RENDER = [
-    "precision mediump float;",
-    "varying vec2 vPosition;",
-    "uniform sampler2D uTexGrass;",
-    "void main() {",
-    "  vec4 c = texture2D(uTexGrass, vPosition);",
-    "  if (c.a * 255.0 > 254.0) {",
-    "    gl_FragColor = vec4(c.rgb * 0.9, 1.0);",
-    "  } else {",
-    "    gl_FragColor = vec4(1.0);",
-    "  }",
-    "}"
-  ].join('\n');
-
-  var FSHADER_HERBIVORE_RENDER = [
-    "precision mediump float;",
-    "varying vec2 vPosition;",
-    "uniform sampler2D uTexGrass;",
-    "void main() {",
-    "  vec4 c = texture2D(uTexGrass, vPosition);",
-    "  if (c.a > 0.0001) {",
-    "    gl_FragColor = vec4(c.rgb * 0.9, 1.0);",
-    "  } else {",
-    "    gl_FragColor = vec4(0.0);",
-    "  }",
-    "}"
-  ].join('\n');
-  var FSHADER_WORLD_RENDER = [
-    "precision mediump float;",
-    "varying vec2 vPosition;",
-    "uniform sampler2D uTexGrass;",
-    "uniform sampler2D uTexHerbivore;",
-    "uniform int uRenderMode;",
-    "const vec4 WHITE = vec4(1.0, 1.0, 1.0, 1.0);",
-    "const vec4 BLACK = vec4(0.0, 0.0, 0.0, 1.0);",
-    "const vec4 BROWN = vec4(0.3, 0.2, 0.1, 1.0);",
-    "const vec4 TRANS = vec4(0.0, 0.0, 0.0, 0.0);",
-    "void main() {",
-    "  vec4 g = texture2D(uTexGrass, vPosition);",
-    "  vec4 h = texture2D(uTexHerbivore, vPosition);",
-    "  if (uRenderMode == 0) {",
-    "    if (h.a > 0.0) {",
-    "      gl_FragColor = WHITE;",
-    "    } else if (g.a > 0.0) {",
-    "      gl_FragColor = vec4(0.1 + g.rgb * 0.9, 1.0);",
-    "    } else {",
-    "      gl_FragColor = BLACK;",
-    "    }",
-    "  } else if (uRenderMode == 1) {",
-    "    if (h.a > 0.0) {",
-    "      gl_FragColor = vec4(h.rgb, 1.0);",
-    "    } else {",
-    "      gl_FragColor = BLACK;",
-    "    }",
-    "  } else if (uRenderMode == 2) {",
-    "    if (h.a > 0.0) {",
-    "      gl_FragColor = vec4(2.0 * (1.0 - h.a), 2.0 * h.a, 0.0, 1.0);",
-    "    } else {",
-    "      gl_FragColor = BLACK;",
-    "    }",
-    "  } else if (uRenderMode == 3) {",
-    "    if (g.a > 0.0) {",
-    "      gl_FragColor = vec4(g.rgb, 1.0);",
-    "    } else {",
-    "      gl_FragColor = BLACK;",
-    "    }",
-    "  } else {",
-    "      gl_FragColor = BROWN;",
-    "  }",
-    "}"
-  ].join('\n');
-
-  var FSHADER_HERBIVORE_ITERATE = [
-    "precision mediump float;",
-    "",
-    "varying vec2 vPosition;",
-    "varying vec2 vRandomCoord;",
-    "varying vec2 vRandomCoord2;",
-    "uniform sampler2D uTexHerbivore;",
-    "uniform sampler2D uTexGrass;",
-    "uniform sampler2D uTexPermutation;",
-    "uniform sampler2D uTexRandom;",
-    "uniform vec2 uPixSize;",
-    "uniform float uHerbivoreStepRate;",
-    "uniform float uHerbivoreSpawnRate;",
-    "uniform float uHerbivoreStartHealth;",
-    "uniform float uHerbivoreIncHealth;",
-    "uniform float uHerbivoreDecHealth;",
-    "uniform float uHerbivoreDislikeRate;",
-    "uniform vec3 uHerbivoreColorMutationRate;",
-    "",
-    "vec2 step;",
-    "vec4 rnd, rnd2, loc_herbi, rem_herbi, loc_grass, perm;",
-    "",
-    "bool herbivore_lives(vec4 herbi) {",
-    "  return herbi.a > 0.0001;",
-    "}",
-    "",
-    "bool herbivore_spawns() {",
-    "  return perm.z < 0.1 && perm.w < uHerbivoreSpawnRate - (0.5 / 255.0);",
-    "}",
-    "",
-    "vec4 herbivore_spawn() {",
-    "  vec3 col = loc_herbi.rgb + (rnd.rgb * 2.0 - 1.0) * uHerbivoreColorMutationRate;",
-    "  return vec4(clamp(col, 0.0, 1.0), uHerbivoreStartHealth);",
-    "}",
-    "",
-    "void main() {",
-    "  rnd = texture2D(uTexRandom, vRandomCoord);",
-    "  rnd2 = texture2D(uTexRandom, vRandomCoord2);",
-    "  loc_herbi = texture2D(uTexHerbivore, vPosition);",
-    "",
-    "  loc_grass = texture2D(uTexGrass, vPosition);",
-    "  if (herbivore_lives(loc_herbi)",
-    "        && loc_grass.a > 0.0",
-    "        && rnd2.x < 1.0 - uHerbivoreDislikeRate * distance(loc_herbi.rgb, loc_grass.rgb)) {",
-    "    loc_herbi.a = min(1.0, loc_herbi.a + uHerbivoreIncHealth);",
-    "  }",
-    "  loc_herbi.a = max(0.0, loc_herbi.a - uHerbivoreDecHealth);",
-    "",
-    "  perm = texture2D(uTexPermutation, vRandomCoord);",
-    "  gl_FragColor = loc_herbi;",
-    "  float disc = perm.x * 255.0;",
-    "  bool spawns = herbivore_spawns();",
-    "  if (disc < 254.5 && (perm.y < uHerbivoreStepRate || spawns)) {",
-    "    if (disc < 3.5) {",
-    "      if (disc < 1.5) {",
-    "        if (disc < 0.5) {",
-    "          step = vec2( 1.0, -1.0);",
-    "        } else {",
-    "          step = vec2( 1.0,  0.0);",
-    "        }",
-    "      } else {",
-    "        if (disc < 2.5) {",
-    "          step = vec2( 1.0,  1.0);",
-    "        } else {",
-    "          step = vec2( 0.0,  1.0);",
-    "        }",
-    "      }",
-    "    } else {",
-    "      if (disc < 5.5) {",
-    "        if (disc < 4.5) {",
-    "          step = vec2(-1.0,  1.0);",
-    "        } else {",
-    "          step = vec2(-1.0,  0.0);",
-    "        }",
-    "      } else {",
-    "        if (disc < 6.5) {",
-    "          step = vec2(-1.0, -1.0);",
-    "        } else {",
-    "          step = vec2( 0.0, -1.0);",
-    "        }",
-    "      }",
-    "    }",
-    "",
-    "    rem_herbi = texture2D(uTexHerbivore, vPosition + step * uPixSize);",
-    "    if (herbivore_lives(loc_herbi)) {",
-    "      if (herbivore_lives(rem_herbi)) {",
-    "      } else {",
-    "        if (spawns) {",
-    "          gl_FragColor = herbivore_spawn();",
-    "        } else {",
-    "          gl_FragColor = vec4(0.0);",
-    "        }",
-    "      }",
-    "    } else {",
-    "      if (herbivore_lives(rem_herbi)) {",
-    "        gl_FragColor = rem_herbi;",
-    "      }",
-    "    }",
-    "  }",
-    "}"
-  ].join('\n');
-
-  var FSHADER_GRASS_GROW = [
-    "precision mediump float;",
-    "",
-    "varying vec2 vPosition;",
-    "varying vec2 vRandomCoord;",
-    "varying vec2 vRandomCoord2;",
-    "uniform vec3 uGrassMutationRate;",
-    "uniform float uGrassGrowRate;",
-    "uniform mediump vec2 uPixSize;",
-    "uniform sampler2D uTexRandom;",
-    "uniform sampler2D uTexGrass;",
-    "uniform sampler2D uTexHerbivore;",
-    "",
-    "const float DARK = 0.0;",
-    "const float LIGH = 0.8;",
-    "",
-    "vec4 g[8];",
-    "vec4 rnd, rnd2, herbi, grass;",
-    "",
-    "vec3 mutateColor(vec3 c) {",
-    "  return clamp(c.rgb + (rnd.rgb * 2.0 - vec3(1.0)) * uGrassMutationRate, 0.0, 1.0);",
-    "}",
-    "",
-    "void grow(vec4 c) {",
-    "  if (c.a * 255.0 > 254.0) {",
-    "    gl_FragColor = vec4(mutateColor(c.rgb), 1.0);",
-    "  }",
-    "}",
-    "",
-    "void main() {",
-    "  grass = texture2D(uTexGrass, vPosition);",
-    "  herbi = texture2D(uTexHerbivore, vPosition);",
-    "  if (herbi.a > 0.0) {",
-    "    gl_FragColor = vec4(0.0);",
-    "    return;",
-    "  }",
-    "  gl_FragColor = grass;",
-    "  rnd = texture2D(uTexRandom, vRandomCoord);",
-    "  rnd2 = texture2D(uTexRandom, vRandomCoord2);",
-    "  if (grass.a * 255.0 < 254.5 && rnd2.a < uGrassGrowRate) {",
-    "    float disc = rnd2.r * 255.0 / 16.0;",
-    "    g[0] = texture2D(uTexGrass, vPosition + vec2(        0.0, -uPixSize.y));",
-    "    g[1] = texture2D(uTexGrass, vPosition + vec2( uPixSize.x, -uPixSize.y));",
-    "    g[2] = texture2D(uTexGrass, vPosition + vec2( uPixSize.x,         0.0));",
-    "    g[3] = texture2D(uTexGrass, vPosition + vec2( uPixSize.x,  uPixSize.y));",
-    "    g[4] = texture2D(uTexGrass, vPosition + vec2(        0.0,  uPixSize.y));",
-    "    g[5] = texture2D(uTexGrass, vPosition + vec2(-uPixSize.x,  uPixSize.y));",
-    "    g[6] = texture2D(uTexGrass, vPosition + vec2(-uPixSize.x,         0.0));",
-    "    g[7] = texture2D(uTexGrass, vPosition + vec2(-uPixSize.x, -uPixSize.y));",
-    "    if (disc < 7.5) {",
-    "      if (disc < 3.5) {",
-    "        if (disc < 1.5) {",
-    "          if (disc < 0.5) {",
-    "            grow(g[0]); grow(g[1]); grow(g[2]); grow(g[3]); grow(g[4]); grow(g[5]); grow(g[6]); grow(g[7]);",
-    "          } else {",
-    "            grow(g[1]); grow(g[2]); grow(g[3]); grow(g[4]); grow(g[5]); grow(g[6]); grow(g[7]); grow(g[0]);",
-    "          }",
-    "        } else {",
-    "          if (disc < 2.5) {",
-    "            grow(g[2]); grow(g[3]); grow(g[4]); grow(g[5]); grow(g[6]); grow(g[7]); grow(g[0]); grow(g[1]);",
-    "          } else {",
-    "            grow(g[3]); grow(g[4]); grow(g[5]); grow(g[6]); grow(g[7]); grow(g[0]); grow(g[1]); grow(g[2]);",
-    "          }",
-    "        }",
-    "      } else {",
-    "        if (disc < 5.5) {",
-    "          if (disc < 4.5) {",
-    "            grow(g[4]); grow(g[5]); grow(g[6]); grow(g[7]); grow(g[0]); grow(g[1]); grow(g[2]); grow(g[3]);",
-    "          } else {",
-    "            grow(g[5]); grow(g[6]); grow(g[7]); grow(g[0]); grow(g[1]); grow(g[2]); grow(g[3]); grow(g[4]);",
-    "          }",
-    "        } else {",
-    "          if (disc < 6.5) {",
-    "            grow(g[6]); grow(g[7]); grow(g[0]); grow(g[1]); grow(g[2]); grow(g[3]); grow(g[4]); grow(g[5]);",
-    "          } else {",
-    "            grow(g[7]); grow(g[0]); grow(g[1]); grow(g[2]); grow(g[3]); grow(g[4]); grow(g[5]); grow(g[6]);",
-    "          }",
-    "        }",
-    "      }",
-    "    } else {",
-    "      if (disc < 11.5) {",
-    "        if (disc < 9.5) {",
-    "          if (disc < 8.5) {",
-    "            grow(g[7]); grow(g[6]); grow(g[5]); grow(g[4]); grow(g[3]); grow(g[2]); grow(g[1]); grow(g[0]);",
-    "          } else {",
-    "            grow(g[6]); grow(g[5]); grow(g[4]); grow(g[3]); grow(g[2]); grow(g[1]); grow(g[0]); grow(g[7]);",
-    "          }",
-    "        } else {",
-    "          if (disc < 10.5) {",
-    "            grow(g[5]); grow(g[4]); grow(g[3]); grow(g[2]); grow(g[1]); grow(g[0]); grow(g[7]); grow(g[6]);",
-    "          } else {",
-    "            grow(g[4]); grow(g[3]); grow(g[2]); grow(g[1]); grow(g[0]); grow(g[7]); grow(g[6]); grow(g[5]);",
-    "          }",
-    "        }",
-    "      } else {",
-    "        if (disc < 13.5) {",
-    "          if (disc < 12.5) {",
-    "            grow(g[3]); grow(g[2]); grow(g[1]); grow(g[0]); grow(g[7]); grow(g[6]); grow(g[5]); grow(g[4]);",
-    "          } else {",
-    "            grow(g[2]); grow(g[1]); grow(g[0]); grow(g[7]); grow(g[6]); grow(g[5]); grow(g[4]); grow(g[3]);",
-    "          }",
-    "        } else {",
-    "          if (disc < 14.5) {",
-    "            grow(g[1]); grow(g[0]); grow(g[7]); grow(g[6]); grow(g[5]); grow(g[4]); grow(g[3]); grow(g[2]);",
-    "          } else {",
-    "            grow(g[0]); grow(g[7]); grow(g[6]); grow(g[5]); grow(g[4]); grow(g[3]); grow(g[2]); grow(g[1]);",
-    "          }",
-    "        }",
-    "      }",
-    "    }",
-    "  }",
-    "}"
-  ].join('\n');
-
-
   function doLayout() {
     if (canvas) {
       var margin = 20;
@@ -932,7 +755,7 @@
 
   self.OPTIONS = OPTIONS;
   return start();
-})(self, window, document, Math, Uint8Array, Float32Array);
+})(self, window, document, Math, Uint8Array, Float32Array, SHADERS);
 
 
 
